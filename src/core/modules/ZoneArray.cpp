@@ -211,15 +211,10 @@ ZoneArray* ZoneArray::create(const QString& catalogFilePath, bool use_mmap)
 			}
 			break;
 		case 2:
-			if (major > MAX_MAJOR_FILE_VERSION)
-			{
-				dbStr += "warning - unsupported version ";
-			}
-			else
-			{
-				rval = new SpecialZoneArray<Star3>(file, byte_swap, use_mmap, static_cast<int>(level), static_cast<int>(mag_min));
-			}
-			break;
+			dbStr += "error - unsupported catalog type 2 (Star3) ";
+			qWarning().noquote() << dbStr;
+			delete file;
+			return Q_NULLPTR;
 		default:
 			dbStr += "error - bad file type ";
 			break;
