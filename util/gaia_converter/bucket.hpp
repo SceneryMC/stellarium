@@ -17,7 +17,7 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
-#include <condition_variable>
+#include <memory>
 
 class BucketWriter {
 public:
@@ -62,7 +62,7 @@ private:
 	int n_buckets_;
 	int zones_per_bucket_;
 	std::string bucket_dir_;
-	std::vector<Bucket> buckets_;
+	std::vector<std::unique_ptr<Bucket>> buckets_;
 	bool finished_{false};
 
 	static void flusher_thread(Bucket* b);

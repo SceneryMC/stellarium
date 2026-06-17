@@ -16,15 +16,16 @@
 // SkyChart .dat record layout (38 bytes per star)
 #pragma pack(push, 1)
 struct alignas(1) SkyChartRecord {
-	uint32_t ra_raw;       // RA  × 3,600,000
-	uint32_t dec_raw;      // (DEC + 90) × 3,600,000
-	uint64_t gaia_id;      // Gaia DR3 source ID
-	int16_t  g_mag;         // G magnitude × 1000
-	int16_t  bp_mag;        // BP magnitude × 1000
-	int16_t  rp_mag;        // RP magnitude × 1000
-	float    pmra;          // mas/yr
-	float    pmdec;         // mas/yr
-	float    plx;           // mas
+	uint32_t ra_raw;       // 0:  RA  × 3,600,000
+	uint32_t dec_raw;      // 4:  (DEC + 90) × 3,600,000
+	uint64_t gaia_id;      // 8:  Gaia DR3 source ID
+	int16_t  g_mag;         // 16: G magnitude × 1000
+	int16_t  bp_mag;        // 18: BP magnitude × 1000
+	int16_t  rp_mag;        // 20: RP magnitude × 1000
+	float    pmra;          // 22: mas/yr
+	float    pmdec;         // 26: mas/yr
+	float    plx;           // 30: mas
+	uint32_t _pad;          // 34: unused
 };
 #pragma pack(pop)
 static_assert(sizeof(SkyChartRecord) == 38, "SkyChartRecord must be 38 bytes");
