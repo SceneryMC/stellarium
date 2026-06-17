@@ -50,13 +50,13 @@ void BucketWriter::push(const BucketRecord& rec) {
 		uint64_t head = ring.head.load(std::memory_order_acquire);
 		if (tail - head + rec_size + sizeof(uint32_t) <= 64 * ring.seg_size)
 			break;
-		if (++spins > 1000000) {
+		if (++spins > 1000) {
 			static std::atomic<bool> warned{false};
 			if (!warned.exchange(true))
 				std::cerr << "WARNING: ring buffer full (bucket " << b
 					  << "), disk write may be too slow\n";
 		}
-		std::this_thread::yield();
+		std::this_thread::sleep_for(std::chrono::microseconds(100));
 	}
 
 	size_t off = tail & mask;
