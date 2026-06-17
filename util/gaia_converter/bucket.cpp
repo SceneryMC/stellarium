@@ -8,8 +8,9 @@
 #include <chrono>
 
 BucketWriter::BucketWriter(int n_buckets, int zones_per_bucket, const std::string& bucket_dir,
-			   int ring_size_mb)
-	: n_buckets_(n_buckets), zones_per_bucket_(zones_per_bucket), bucket_dir_(bucket_dir)
+			   int ring_size_mb, int n_flushers)
+	: n_buckets_(n_buckets), zones_per_bucket_(zones_per_bucket),
+	  n_flushers_(n_flushers), bucket_dir_(bucket_dir)
 {
 	buckets_.reserve(n_buckets);
 	for (int b = 0; b < n_buckets; ++b) {
@@ -17,13 +18,18 @@ BucketWriter::BucketWriter(int n_buckets, int zones_per_bucket, const std::strin
 		std::ostringstream oss;
 		oss << bucket_dir << "/bucket_" << std::setw(4) << std::setfill('0') << b << ".dat";
 		bk->path = oss.str();
-		bk->file = nullptr;  // open lazily in flusher
+		bk->file = nullptr;
 		size_t ring_bytes = static_cast<size_t>(ring_size_mb) * 1024 * 1024;
 		bk->ring.seg_size = ring_bytes / 64;
 		bk->ring.data = new uint8_t[ring_bytes];
 		buckets_.push_back(std::move(bk));
 	}
-	flusher_ = std::thread(&BucketWriter::flusher_loop, this);
+	int per_flusher = (n_buckets + n_flushers - 1) / n_flushers;
+	for (int f = 0; f < n_flushers; ++f) {
+		int start = f * per_flusher;
+		int end = std::min(start + per_flusher, n_buckets);
+		flushers_.emplace_back(&BucketWriter::flusher_loop, this, start, end);
+	}
 }
 
 BucketWriter::~BucketWriter() {
@@ -64,8 +70,8 @@ void BucketWriter::finish() {
 	if (finished_.exchange(true)) return;
 	for (auto& bk : buckets_)
 		bk->done = true;
-	if (flusher_.joinable())
-		flusher_.join();
+	for (auto& f : flushers_)
+		if (f.joinable()) f.join();
 	for (auto& bk : buckets_) {
 		if (bk->file) { std::fclose(bk->file); bk->file = nullptr; }
 		delete[] bk->ring.data;
@@ -108,13 +114,14 @@ void BucketWriter::close_lru_file() {
 	}
 }
 
-void BucketWriter::flusher_loop() {
+void BucketWriter::flusher_loop(int start_bucket, int end_bucket) {
 	const size_t mask = (64 * buckets_[0]->ring.seg_size) - 1;
 	uint8_t local_buf[65536];
 
 	while (true) {
 		bool all_empty = true;
-		for (auto& bk : buckets_) {
+		for (int bi = start_bucket; bi < end_bucket; ++bi) {
+			auto& bk = buckets_[bi];
 			auto& ring = bk->ring;
 			uint64_t tail = ring.tail.load(std::memory_order_acquire);
 			uint64_t head_val = ring.head.load(std::memory_order_relaxed);

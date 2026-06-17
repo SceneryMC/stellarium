@@ -15,8 +15,9 @@
 
 class BucketWriter {
 public:
+	// start_bucket, end_bucket: half-open range [start, end)
 	BucketWriter(int n_buckets, int zones_per_bucket, const std::string& bucket_dir,
-		     int ring_size_mb = 4);
+		     int ring_size_mb = 16, int n_flushers = 4);
 	~BucketWriter();
 
 	void push(const BucketRecord& rec);
@@ -43,15 +44,16 @@ private:
 
 	int n_buckets_;
 	int zones_per_bucket_;
+	int n_flushers_;
 	std::string bucket_dir_;
 	std::vector<std::unique_ptr<Bucket>> buckets_;
-	std::thread flusher_;
+	std::vector<std::thread> flushers_;
 	std::atomic<bool> finished_{false};
 	int open_count_ = 0;
 	static constexpr int MAX_OPEN_FILES = 256;
 	int clock_ = 0;
 
-	void flusher_loop();
+	void flusher_loop(int start_bucket, int end_bucket);
 	void open_bucket_file(Bucket* bk);
 	void close_lru_file();
 };
