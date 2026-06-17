@@ -138,8 +138,8 @@ int main(int argc, char** argv) {
 	// Level configuration
 	std::vector<LevelConfig> levels = {
 		{"stars_8",  8, 16.75, 18.50, 256},
-		{"stars_9",  9, 18.50, 20.25, 512},
-		{"stars_10", 10, 20.25, 23.00, 512},
+		{"stars_9",  9, 18.50, 20.25, 256},
+		{"stars_10", 10, 20.25, 23.00, 256},
 	};
 
 	// Discover .dat files
@@ -180,7 +180,7 @@ int main(int argc, char** argv) {
 			return 1;
 		}
 		int zones_per_bucket = (nr_of_zones(lv.level) + lv.n_buckets - 1) / lv.n_buckets;
-		auto bw = new BucketWriter(lv.n_buckets, zones_per_bucket, bucket_dir.string(), 4);
+		auto bw = new BucketWriter(lv.n_buckets, zones_per_bucket, bucket_dir.string(), 16);
 		bucket_writers.push_back(bw);
 	}
 
