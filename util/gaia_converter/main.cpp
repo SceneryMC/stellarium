@@ -226,7 +226,7 @@ int main(int argc, char** argv) {
 		int mag_min = static_cast<int>(lv.mag_lo * 1000.0);
 		std::string out_path = out_dir + "/" + lv.name + "_1v0_1.cat";
 
-		write_cat(paths, all_counts[li], lv.level, mag_min, out_path, 4);
+		write_cat(paths, all_counts[li], lv.level, mag_min, out_path, n_workers);
 
 		// Clean up bucket files
 		for (const auto& p : paths) fs::remove(p);
