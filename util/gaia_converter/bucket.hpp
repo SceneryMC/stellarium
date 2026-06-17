@@ -1,13 +1,12 @@
-// Simple bucket writer: per-bucket mutex + FILE*
-// Workers directly write to disk — no ring buffers, no flusher threads.
-// Deadlocks and "too many open files" eliminated.
-
 #pragma once
 #include "types.hpp"
 #include <string>
 #include <vector>
 #include <mutex>
 #include <memory>
+#include <cstdio>
+#include <list>
+#include <unordered_map>
 
 class BucketWriter {
 public:
@@ -20,13 +19,21 @@ public:
 	int num_buckets() const { return n_buckets_; }
 
 private:
+	static constexpr int MAX_OPEN = 128;
+
 	struct Bucket {
 		std::string path;
 		std::mutex  mtx;
+		FILE*       file = nullptr;  // non-null when in LRU cache
 	};
 
 	int n_buckets_;
 	int zones_per_bucket_;
 	std::string bucket_dir_;
 	std::vector<std::unique_ptr<Bucket>> buckets_;
+
+	// LRU file handle cache
+	std::mutex           lru_mtx_;
+	std::list<int>       lru_list_;                     // bucket indices, MRU at front
+	std::unordered_map<int, FILE*> lru_map_;             // bucket index → FILE*
 };
