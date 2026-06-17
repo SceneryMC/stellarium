@@ -17,13 +17,9 @@ BucketWriter::BucketWriter(int n_buckets, int zones_per_bucket, const std::strin
 		std::ostringstream oss;
 		oss << bucket_dir << "/bucket_" << std::setw(4) << std::setfill('0') << b << ".dat";
 		bk->path = oss.str();
-		bk->file = std::fopen(bk->path.c_str(), "wb");
-		if (!bk->file) {
-			std::cerr << "ERROR: cannot open bucket file " << bk->path << ": " << std::strerror(errno) << "\n";
-			std::exit(1);
-		}
+		bk->file = nullptr;  // open lazily in flusher
 		size_t ring_bytes = static_cast<size_t>(ring_size_mb) * 1024 * 1024;
-		bk->ring.seg_size = ring_bytes / 64;  // 64 segments
+		bk->ring.seg_size = ring_bytes / 64;
 		bk->ring.data = new uint8_t[ring_bytes];
 		buckets_.push_back(std::move(bk));
 	}
@@ -64,7 +60,7 @@ void BucketWriter::finish() {
 	if (flusher_.joinable())
 		flusher_.join();
 	for (auto& bk : buckets_) {
-		std::fclose(bk->file);
+		if (bk->file) { std::fclose(bk->file); bk->file = nullptr; }
 		delete[] bk->ring.data;
 	}
 }
@@ -74,6 +70,35 @@ std::vector<std::string> BucketWriter::bucket_paths() const {
 	for (const auto& bk : buckets_)
 		paths.push_back(bk->path);
 	return paths;
+}
+
+void BucketWriter::open_bucket_file(Bucket* bk) {
+	if (bk->file) return;
+	while (open_count_ >= MAX_OPEN_FILES)
+		close_lru_file();
+	bk->file = std::fopen(bk->path.c_str(), "ab");  // append mode
+	if (!bk->file) {
+		std::cerr << "ERROR: cannot open bucket file " << bk->path << ": " << std::strerror(errno) << "\n";
+		std::exit(1);
+	}
+	open_count_++;
+	bk->last_used = clock_++;
+}
+
+void BucketWriter::close_lru_file() {
+	int oldest = 0x7fffffff;
+	Bucket* victim = nullptr;
+	for (auto& bk : buckets_) {
+		if (bk->file && bk->last_used < oldest) {
+			oldest = bk->last_used;
+			victim = bk.get();
+		}
+	}
+	if (victim) {
+		std::fclose(victim->file);
+		victim->file = nullptr;
+		open_count_--;
+	}
 }
 
 void BucketWriter::flusher_loop() {
@@ -87,8 +112,12 @@ void BucketWriter::flusher_loop() {
 			uint64_t tail = ring.tail.load(std::memory_order_acquire);
 			uint64_t head_val = ring.head.load(std::memory_order_relaxed);
 
-			while (head_val < tail) {
+			if (head_val < tail) {
 				all_empty = false;
+				open_bucket_file(bk.get());
+			}
+
+			while (head_val < tail) {
 				size_t off = head_val & mask;
 				uint32_t sz;
 				std::memcpy(&sz, ring.data + off, sizeof(sz));

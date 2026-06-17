@@ -37,7 +37,8 @@ private:
 		std::string path;
 		FILE*       file = nullptr;
 		std::mutex  write_mutex;
-		bool        done = false;  // set by finish(), read by flusher
+		bool        done = false;
+		int         last_used = -1;  // for LRU eviction
 	};
 
 	int n_buckets_;
@@ -46,6 +47,11 @@ private:
 	std::vector<std::unique_ptr<Bucket>> buckets_;
 	std::thread flusher_;
 	std::atomic<bool> finished_{false};
+	int open_count_ = 0;
+	static constexpr int MAX_OPEN_FILES = 256;
+	int clock_ = 0;
 
 	void flusher_loop();
+	void open_bucket_file(Bucket* bk);
+	void close_lru_file();
 };
