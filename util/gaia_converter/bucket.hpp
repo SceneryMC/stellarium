@@ -1,23 +1,17 @@
-// Thread-safe bucket writer: lock-free ring buffers + shared flusher thread per level.
-// Multiple worker threads push BucketRecords into per-bucket ring buffers.
-// One dedicated I/O thread per BucketWriter flushes all its buckets.
+// Simple bucket writer: per-bucket mutex + FILE*
+// Workers directly write to disk — no ring buffers, no flusher threads.
+// Deadlocks and "too many open files" eliminated.
 
 #pragma once
 #include "types.hpp"
-#include <cstdint>
-#include <cstdio>
 #include <string>
 #include <vector>
-#include <thread>
-#include <atomic>
 #include <mutex>
 #include <memory>
 
 class BucketWriter {
 public:
-	// start_bucket, end_bucket: half-open range [start, end)
-	BucketWriter(int n_buckets, int zones_per_bucket, const std::string& bucket_dir,
-		     int ring_size_mb = 16, int n_flushers = 4);
+	BucketWriter(int n_buckets, int zones_per_bucket, const std::string& bucket_dir);
 	~BucketWriter();
 
 	void push(const BucketRecord& rec);
@@ -26,34 +20,14 @@ public:
 	int num_buckets() const { return n_buckets_; }
 
 private:
-	struct alignas(64) RingBuffer {
-		std::atomic<uint64_t> head{0};
-		std::atomic<uint64_t> tail{0};
-		uint8_t* data = nullptr;
-		size_t   seg_size = 0;
-	};
-
 	struct Bucket {
-		RingBuffer  ring;
 		std::string path;
 		FILE*       file = nullptr;
-		std::mutex  write_mutex;
-		bool        done = false;
-		int         last_used = -1;  // for LRU eviction
+		std::mutex  mtx;
 	};
 
 	int n_buckets_;
 	int zones_per_bucket_;
-	int n_flushers_;
 	std::string bucket_dir_;
 	std::vector<std::unique_ptr<Bucket>> buckets_;
-	std::vector<std::thread> flushers_;
-	std::atomic<bool> finished_{false};
-	int open_count_ = 0;
-	static constexpr int MAX_OPEN_FILES = 256;
-	int clock_ = 0;
-
-	void flusher_loop(int start_bucket, int end_bucket);
-	void open_bucket_file(Bucket* bk);
-	void close_lru_file();
 };

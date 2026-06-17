@@ -180,7 +180,7 @@ int main(int argc, char** argv) {
 			return 1;
 		}
 		int zones_per_bucket = (nr_of_zones(lv.level) + lv.n_buckets - 1) / lv.n_buckets;
-		auto bw = new BucketWriter(lv.n_buckets, zones_per_bucket, bucket_dir.string(), 16, 4);
+		auto bw = new BucketWriter(lv.n_buckets, zones_per_bucket, bucket_dir.string());
 		bucket_writers.push_back(bw);
 	}
 
