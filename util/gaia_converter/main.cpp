@@ -1,8 +1,5 @@
 // SkyChart Gaia .dat → Stellarium .cat converter
-// Usage: gaia_converter --skychart <dir> --out-dir <dir> [--workers <n>]
-//
-// Pass 1: Scan .dat files in parallel → compute Vmag, B-V, zone → push to bucket files
-// Pass 2: Sort each bucket in parallel → write .cat
+// Usage: gaia_converter --skychart <dir> --out-dir <dir> [--workers <n>] [--dry-run]
 
 #include "types.hpp"
 #include "convert.hpp"
@@ -20,28 +17,35 @@
 #include <iostream>
 #include <algorithm>
 #include <filesystem>
+#include <chrono>
 
 namespace fs = std::filesystem;
+using namespace std::chrono;
 
 struct LevelConfig {
 	std::string name;
 	int         level;
-	double      mag_lo;   // V magnitude lower bound
-	double      mag_hi;   // V magnitude upper bound
+	double      mag_lo;
+	double      mag_hi;
 	int         n_buckets;
 };
 
-struct Pass1Result {
-	std::vector<uint32_t> counts;
-	std::vector<std::string> bucket_paths;
-};
+using ZoneCounts = std::vector<std::vector<uint32_t>>;
 
-// Scan one .dat file and push records to bucket writers
+static ZoneCounts make_zone_counts(const std::vector<LevelConfig>& levels) {
+	ZoneCounts out;
+	for (const auto& lv : levels)
+		out.emplace_back(nr_of_zones(lv.level), 0);
+	return out;
+}
+
+// Scan one .dat file — uses thread-local counts (no race)
 static void process_dat_file(
 	const std::string& path,
 	const std::vector<LevelConfig>& levels,
 	std::vector<BucketWriter*>& bucket_writers,
-	std::vector<std::vector<uint32_t>>& all_counts)
+	ZoneCounts& local_counts,
+	bool dry_run)
 {
 	FILE* f = std::fopen(path.c_str(), "rb");
 	if (!f) return;
@@ -68,7 +72,6 @@ static void process_dat_file(
 		double bp  = r.bp_mag / 1000.0;
 		double rp  = r.rp_mag / 1000.0;
 
-		// BP/RP may be invalid for very bright or very faint stars
 		bool have_color = (std::abs(r.bp_mag) < 30000 && std::abs(r.rp_mag) < 30000);
 		double c  = have_color ? (bp - rp) : NAN;
 		double v  = g_to_v(g, c);
@@ -81,29 +84,32 @@ static void process_dat_file(
 
 			double ra_rad  = ra  * M_PI / 180.0;
 			double dec_rad = dec * M_PI / 180.0;
-			double x = std::cos(ra_rad) * std::cos(dec_rad);
-			double y = std::sin(ra_rad) * std::cos(dec_rad);
+			double cos_dec = std::cos(dec_rad);
+			double x = std::cos(ra_rad) * cos_dec;
+			double y = std::sin(ra_rad) * cos_dec;
 			double z = std::sin(dec_rad);
 
 			int zone = zone_number(x, y, z, lv.level);
 
-			// Update count
-			all_counts[li][zone]++;
+			// Thread-local count (no race)
+			local_counts[li][zone]++;
 
-			// Build bucket record
-			BucketRecord brec{};
-			brec.zone    = static_cast<uint32_t>(zone);
-			brec.vmag    = static_cast<int16_t>(std::round(v * 1000.0));
-			brec.bv      = static_cast<int16_t>(std::round(bv * 1000.0));
-			brec.ra_i    = static_cast<int32_t>(std::round(ra * 3600000.0));
-			brec.dec_i   = static_cast<int32_t>(std::round(dec * 3600000.0));
-			brec.gaia_id = r.gaia_id;
-			brec.pmra_i  = static_cast<int32_t>(std::round(r.pmra * 1000.0));
-			brec.pmdec_i = static_cast<int32_t>(std::round(r.pmdec * 1000.0));
-			brec.plx_i   = static_cast<int32_t>(std::round(r.plx  * 100.0));
+			if (dry_run) {
+			} else {
+				BucketRecord brec{};
+				brec.zone    = static_cast<uint32_t>(zone);
+				brec.vmag    = static_cast<int16_t>(std::round(v * 1000.0));
+				brec.bv      = static_cast<int16_t>(std::round(bv * 1000.0));
+				brec.ra_i    = static_cast<int32_t>(std::round(ra * 3600000.0));
+				brec.dec_i   = static_cast<int32_t>(std::round(dec * 3600000.0));
+				brec.gaia_id = r.gaia_id;
+				brec.pmra_i  = static_cast<int32_t>(std::round(r.pmra * 1000.0));
+				brec.pmdec_i = static_cast<int32_t>(std::round(r.pmdec * 1000.0));
+				brec.plx_i   = static_cast<int32_t>(std::round(r.plx  * 100.0));
 
-			bucket_writers[li]->push(brec);
-			break;  // star belongs to exactly one level
+				bucket_writers[li]->push(brec);
+			}
+			break;
 		}
 	}
 }
@@ -113,29 +119,31 @@ int main(int argc, char** argv) {
 	std::string out_dir;
 	std::string work_dir;
 	int n_workers = std::thread::hardware_concurrency();
+	bool dry_run  = false;
 
-	// Parse args
 	for (int i = 1; i < argc; ++i) {
 		std::string arg = argv[i];
 		if (arg == "--skychart" && i+1 < argc) skychart_dir = argv[++i];
 		else if (arg == "--out-dir" && i+1 < argc)  out_dir = argv[++i];
 		else if (arg == "--work-dir" && i+1 < argc) work_dir = argv[++i];
 		else if (arg == "--workers" && i+1 < argc)  n_workers = std::stoi(argv[++i]);
+		else if (arg == "--dry-run")                 dry_run = true;
 		else {
-			std::cerr << "Usage: gaia_converter --skychart <dir> --out-dir <dir> [--workers <n>]\n";
+			std::cerr << "Usage: gaia_converter --skychart <dir> --out-dir <dir> [--workers <n>] [--dry-run]\n";
 			return 1;
 		}
 	}
-	if (skychart_dir.empty() || out_dir.empty()) {
-		std::cerr << "Usage: gaia_converter --skychart <dir> --out-dir <dir> [--workers <n>]\n";
+	if (skychart_dir.empty()) {
+		std::cerr << "Usage: gaia_converter --skychart <dir> --out-dir <dir> [--workers <n>] [--dry-run]\n";
 		return 1;
 	}
 	if (work_dir.empty()) work_dir = out_dir;
 
-	fs::create_directories(out_dir);
-	fs::create_directories(work_dir);
+	if (!dry_run) {
+		fs::create_directories(out_dir);
+		fs::create_directories(work_dir);
+	}
 
-	// Level configuration
 	std::vector<LevelConfig> levels = {
 		{"stars_8",  8, 16.75, 18.50, 256},
 		{"stars_9",  9, 18.50, 20.25, 256},
@@ -158,42 +166,51 @@ int main(int argc, char** argv) {
 	}
 	std::cout << "Found " << dat_files.size() << " SkyChart .dat files\n";
 
-	// Per-level zone counts
-	std::vector<std::vector<uint32_t>> all_counts;
-	for (const auto& lv : levels) {
-		all_counts.emplace_back(nr_of_zones(lv.level), 0);
-	}
+	// Global counts (reduced from per-worker)
+	ZoneCounts all_counts = make_zone_counts(levels);
+
+	// Per-worker local counts (no race)
+	std::vector<ZoneCounts> worker_counts(n_workers);
+	for (int t = 0; t < n_workers; ++t)
+		worker_counts[t] = make_zone_counts(levels);
 
 	// ── PASS 1: scan + bucket ──
 	std::cout << "\n===== PASS 1: Scanning " << dat_files.size() << " files ("
-		  << n_workers << " workers) =====\n";
+		  << n_workers << " workers)";
+	if (dry_run) std::cout << " [DRY RUN — no disk writes]";
+	std::cout << " =====\n";
 
-	// Create bucket writers (one per level, buckets per level)
+	auto t0 = steady_clock::now();
+
+	// Create bucket writers (one per level)
 	std::vector<BucketWriter*> bucket_writers;
-	for (size_t li = 0; li < levels.size(); ++li) {
-		const auto& lv = levels[li];
-		auto bucket_dir = fs::path(work_dir) / (lv.name + "_buckets");
-		std::error_code ec;
-		fs::create_directories(bucket_dir, ec);
-		if (ec) {
-			std::cerr << "ERROR: cannot create bucket dir " << bucket_dir << ": " << ec.message() << "\n";
-			return 1;
+	if (!dry_run) {
+		for (size_t li = 0; li < levels.size(); ++li) {
+			const auto& lv = levels[li];
+			auto bucket_dir = fs::path(work_dir) / (lv.name + "_buckets");
+			std::error_code ec;
+			fs::create_directories(bucket_dir, ec);
+			if (ec) {
+				std::cerr << "ERROR: cannot create bucket dir " << bucket_dir << ": " << ec.message() << "\n";
+				return 1;
+			}
+			int zones_per_bucket = (nr_of_zones(lv.level) + lv.n_buckets - 1) / lv.n_buckets;
+			auto bw = new BucketWriter(lv.n_buckets, zones_per_bucket, bucket_dir.string());
+			bucket_writers.push_back(bw);
 		}
-		int zones_per_bucket = (nr_of_zones(lv.level) + lv.n_buckets - 1) / lv.n_buckets;
-		auto bw = new BucketWriter(lv.n_buckets, zones_per_bucket, bucket_dir.string());
-		bucket_writers.push_back(bw);
 	}
 
-	// Thread pool for scanning
-	std::mutex file_mutex;
+	// Thread pool
 	std::atomic<int> next_file{0};
 	std::vector<std::thread> workers;
 	for (int t = 0; t < n_workers; ++t) {
-		workers.emplace_back([&]() {
+		int worker_id = t;
+		workers.emplace_back([&, worker_id]() {
 			while (true) {
 				int fi = next_file.fetch_add(1);
 				if (fi >= static_cast<int>(dat_files.size())) break;
-				process_dat_file(dat_files[fi], levels, bucket_writers, all_counts);
+				process_dat_file(dat_files[fi], levels, bucket_writers,
+						 worker_counts[worker_id], dry_run);
 			}
 		});
 	}
@@ -203,17 +220,28 @@ int main(int argc, char** argv) {
 		while (next_file.load() < static_cast<int>(dat_files.size())) {
 			std::this_thread::sleep_for(std::chrono::seconds(2));
 			int done = next_file.load();
+			auto elapsed = duration_cast<seconds>(steady_clock::now() - t0).count();
 			std::cout << "  [" << done << "/" << dat_files.size() << "] "
-				  << (100.0*done/dat_files.size()) << "%\n";
+				  << (100.0*done/dat_files.size()) << "%  "
+				  << elapsed << "s\n";
 		}
 	});
 
 	for (auto& w : workers) w.join();
 	progress.join();
 
-	// Finish bucket writers
-	for (auto* bw : bucket_writers) bw->finish();
-	std::cout << "PASS 1 complete.\n";
+	// Reduce local counts → global
+	for (int t = 0; t < n_workers; ++t) {
+		for (size_t li = 0; li < levels.size(); ++li) {
+			size_t nz = all_counts[li].size();
+			for (size_t z = 0; z < nz; ++z)
+				all_counts[li][z] += worker_counts[t][li][z];
+		}
+	}
+
+	auto t1 = steady_clock::now();
+	double elapsed = duration_cast<milliseconds>(t1 - t0).count() / 1000.0;
+	std::cout << "PASS 1 complete in " << elapsed << "s\n";
 
 	// Print counts
 	for (size_t li = 0; li < levels.size(); ++li) {
@@ -224,6 +252,14 @@ int main(int argc, char** argv) {
 		std::cout << "  " << lv.name << ": " << total << " stars, " << non_empty << " non-empty zones\n";
 	}
 
+	if (dry_run) {
+		std::cout << "DRY RUN — skipping Pass 2 (sort + write .cat)\n";
+		return 0;
+	}
+
+	// Finish bucket writers
+	for (auto* bw : bucket_writers) bw->finish();
+
 	// ── PASS 2: sort + write .cat ──
 	for (size_t li = 0; li < levels.size(); ++li) {
 		const auto& lv = levels[li];
@@ -233,11 +269,9 @@ int main(int argc, char** argv) {
 
 		write_cat(paths, all_counts[li], lv.level, mag_min, out_path, n_workers);
 
-		// Clean up bucket files
 		for (const auto& p : paths) fs::remove(p);
 	}
 
-	// Clean up
 	for (auto* bw : bucket_writers) { bw->finish(); delete bw; }
 
 	std::cout << "\nDone.\n";
