@@ -170,12 +170,14 @@ int main(int argc, char** argv) {
 	std::cout << "\n===== PASS 1: Scanning " << dat_files.size() << " files ("
 		  << n_workers << " workers) =====\n";
 
-	// Create bucket writers (one per level)
+	// Create bucket writers (one per level, buckets per level)
 	std::vector<BucketWriter*> bucket_writers;
 	for (size_t li = 0; li < levels.size(); ++li) {
 		const auto& lv = levels[li];
+		auto bucket_dir = fs::path(work_dir) / (lv.name + "_buckets");
+		fs::create_directories(bucket_dir);
 		int zones_per_bucket = (nr_of_zones(lv.level) + lv.n_buckets - 1) / lv.n_buckets;
-		auto bw = new BucketWriter(lv.n_buckets, zones_per_bucket, work_dir, 16);
+		auto bw = new BucketWriter(lv.n_buckets, zones_per_bucket, bucket_dir.string(), 16);
 		bucket_writers.push_back(bw);
 	}
 
