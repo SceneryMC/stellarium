@@ -14,7 +14,6 @@ BucketWriter::BucketWriter(int n_buckets, int zones_per_bucket, const std::strin
 		std::ostringstream oss;
 		oss << bucket_dir << "/bucket_" << std::setw(4) << std::setfill('0') << b << ".dat";
 		bk->path = oss.str();
-		bk->file = nullptr;
 		buckets_.push_back(std::move(bk));
 	}
 }
@@ -29,24 +28,18 @@ void BucketWriter::push(const BucketRecord& rec) {
 	auto& bk = *buckets_[b];
 
 	std::lock_guard<std::mutex> lock(bk.mtx);
-	if (!bk.file) {
-		bk.file = std::fopen(bk.path.c_str(), "ab");
-		if (!bk.file) {
-			std::cerr << "ERROR: cannot open " << bk.path << ": " << std::strerror(errno) << "\n";
-			std::exit(1);
-		}
+	// Open, write, close — keeps max open files = active worker count
+	FILE* f = std::fopen(bk.path.c_str(), "ab");
+	if (!f) {
+		std::cerr << "ERROR: cannot open " << bk.path << ": " << std::strerror(errno) << "\n";
+		std::exit(1);
 	}
-	std::fwrite(&rec, sizeof(BucketRecord), 1, bk.file);
+	std::fwrite(&rec, sizeof(BucketRecord), 1, f);
+	std::fclose(f);
 }
 
 void BucketWriter::finish() {
-	for (auto& bk : buckets_) {
-		std::lock_guard<std::mutex> lock(bk->mtx);
-		if (bk->file) {
-			std::fclose(bk->file);
-			bk->file = nullptr;
-		}
-	}
+	// all writes are synchronous — nothing to flush
 }
 
 std::vector<std::string> BucketWriter::bucket_paths() const {

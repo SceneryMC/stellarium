@@ -22,7 +22,6 @@ public:
 private:
 	struct Bucket {
 		std::string path;
-		FILE*       file = nullptr;
 		std::mutex  mtx;
 	};
 
