@@ -67,13 +67,11 @@ static void process_dat_file(
 		double g   = r.g_mag / 1000.0;
 		double bp  = r.bp_mag / 1000.0;
 		double rp  = r.rp_mag / 1000.0;
-		double c   = bp - rp;
 
-		// Skip invalid photometry
-		if (std::abs(r.bp_mag) >= 30000 || std::abs(r.rp_mag) >= 30000)
-			continue;
-
-		double v = g_to_v(g, c);
+		// BP/RP may be invalid for very bright or very faint stars
+		bool have_color = (std::abs(r.bp_mag) < 30000 && std::abs(r.rp_mag) < 30000);
+		double c  = have_color ? (bp - rp) : NAN;
+		double v  = g_to_v(g, c);
 		double bv = bp_rp_to_bv(c);
 
 		// Route to correct level
