@@ -1,5 +1,6 @@
 #include "bucket.hpp"
 #include <cstring>
+#include <cerrno>
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
@@ -18,7 +19,7 @@ BucketWriter::BucketWriter(int n_buckets, int zones_per_bucket, const std::strin
 		bk->path = oss.str();
 		bk->file = std::fopen(bk->path.c_str(), "wb");
 		if (!bk->file) {
-			std::cerr << "ERROR: cannot open bucket file " << bk->path << "\n";
+			std::cerr << "ERROR: cannot open bucket file " << bk->path << ": " << std::strerror(errno) << "\n";
 			std::exit(1);
 		}
 		size_t ring_bytes = static_cast<size_t>(ring_size_mb) * 1024 * 1024;

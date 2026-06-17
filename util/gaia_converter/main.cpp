@@ -173,7 +173,12 @@ int main(int argc, char** argv) {
 	for (size_t li = 0; li < levels.size(); ++li) {
 		const auto& lv = levels[li];
 		auto bucket_dir = fs::path(work_dir) / (lv.name + "_buckets");
-		fs::create_directories(bucket_dir);
+		std::error_code ec;
+		fs::create_directories(bucket_dir, ec);
+		if (ec) {
+			std::cerr << "ERROR: cannot create bucket dir " << bucket_dir << ": " << ec.message() << "\n";
+			return 1;
+		}
 		int zones_per_bucket = (nr_of_zones(lv.level) + lv.n_buckets - 1) / lv.n_buckets;
 		auto bw = new BucketWriter(lv.n_buckets, zones_per_bucket, bucket_dir.string(), 4);
 		bucket_writers.push_back(bw);
